@@ -243,6 +243,16 @@ function projectParallax(x, y, depth){
     scale: 1/d
   };
 }
+function sunVector(tod){
+  const t = clamp01(tod);
+  const angle = lerp(-Math.PI*0.28, Math.PI*1.12, t);
+  return { x: Math.cos(angle), y: Math.sin(angle) };
+}
+function sunWarmth(tod){
+  const t = clamp01(tod);
+  const dist = Math.abs(t - 0.5);
+  return clamp01(1 - dist*2.1); // warmer near dawn/dusk
+}
 
 const params = {
   target: {
@@ -765,6 +775,8 @@ function drawClouds(dt){
   const heavy = smoothstep(clamp01((params.current.rain-0.55)/0.45));
   const tod = params.current.tod;
   const day = smoothstep(clamp01((tod-0.18)/0.55));
+  const sun = sunVector(tod);
+  const warmth = sunWarmth(tod);
 
   const desired = Math.round(lerp(6, 38, cov));
   if (Math.abs(desired - clouds.length) > 7) rebuildClouds();
@@ -786,6 +798,7 @@ function drawClouds(dt){
 
     const tint = lerp(1.0, 0.84, overcast) * lerp(1.0, 0.93, heavy) * lerp(0.92, 1.0, day);
     const cool = lerp(1.00, 0.93, 1.0-c.dep);
+    const sunLit = clamp01(0.42 + sun.x*0.42 + sun.y*0.28);
 
     const sizeBase = Math.max(1, c.tex.width * c.s * lerp(0.35, 0.95, 1.0-c.dep));
     const x = c.x + Math.sin(c.wob)*12*(0.6+c.dep);
@@ -800,6 +813,20 @@ function drawClouds(dt){
     ctx.drawImage(c.tex, -size*0.5, -size*0.32, size, size*0.62);
     ctx.globalCompositeOperation = 'source-atop';
     ctx.fillStyle = `rgba(${Math.floor(255*tint*cool)},${Math.floor(255*tint*cool)},${Math.floor(255*tint)},1)`;
+    ctx.fillRect(-size*0.5, -size*0.32, size, size*0.62);
+    // Soft highlight on sun-facing edge
+    const grad = ctx.createLinearGradient(-size*0.6, -size*0.2, size*0.6, size*0.1);
+    grad.addColorStop(0, `rgba(${210 + 30*warmth},${210 + 14*warmth},${225 - 8*warmth},${0.08 + 0.12*sunLit})`);
+    grad.addColorStop(1, `rgba(${200 + 14*warmth},${205 + 10*warmth},${220 - 6*warmth},${0.02 + 0.08*sunLit})`);
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.fillStyle = grad;
+    ctx.fillRect(-size*0.5, -size*0.32, size, size*0.62);
+    // Subtle underside shadow for volume
+    const shade = ctx.createLinearGradient(0, -size*0.1, 0, size*0.5);
+    shade.addColorStop(0, `rgba(0,0,0,0)`);
+    shade.addColorStop(1, `rgba(0,0,0,${0.10 + 0.16*(1-c.dep)})`);
+    ctx.globalCompositeOperation = 'multiply';
+    ctx.fillStyle = shade;
     ctx.fillRect(-size*0.5, -size*0.32, size, size*0.62);
     ctx.restore();
     ctx.globalCompositeOperation = 'source-over';
