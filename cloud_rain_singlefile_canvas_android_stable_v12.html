@@ -284,7 +284,9 @@ bindRange(ui.thPower,'thPower');
 
 ui.thunderToggle.addEventListener('click', ()=>{
   params.target.thunder = !params.target.thunder;
-  if (params.target.thunder) params.target.storm = false;
+  // When user turns thunder off, also clear storm mode so lightning fully stops.
+  // (Storm mode is enabled only via the Storm preset.)
+  if (!params.target.thunder) params.target.storm = false;
   syncLabels();
   ensureAudioUnlocked();
 });
