@@ -1,0 +1,989 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Cloud and Rain Simulation (Single-File, Android-Stable)</title>
+<style>
+  :root{
+    --panel-bg: rgba(10,12,16,0.44);
+    --panel-br: rgba(255,255,255,0.12);
+    --text: rgba(255,255,255,0.92);
+    --muted: rgba(255,255,255,0.70);
+  }
+  html,body{ margin:0; height:100%; overflow:hidden; background:#000; font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial; }
+  #c{ position:fixed; inset:0; display:block; width:100vw; height:100vh; }
+
+  #ui{
+    position:fixed; left:14px; right:14px; bottom:14px;
+    max-width:1140px; margin:0 auto; padding:12px;
+    border-radius:18px;
+    background: var(--panel-bg);
+    border: 1px solid var(--panel-br);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    color: var(--text);
+    box-shadow: 0 12px 34px rgba(0,0,0,0.35);
+    user-select:none;
+    z-index:10;
+  }
+  #ui .header{ display:flex; justify-content:space-between; align-items:flex-start; gap:10px; margin-bottom:10px; }
+  #ui .title{ line-height:1.15; padding-top:2px; }
+  #ui .title strong{ font-weight:700; letter-spacing:.2px; font-size:18px; }
+  #ui .title span{ display:block; font-size:12px; color:var(--muted); margin-top:4px; max-width:80ch; }
+
+  .btns{ display:flex; flex-wrap:wrap; gap:8px; justify-content:flex-end; align-items:center; }
+  button, .toggle{
+    appearance:none;
+    border: 1px solid rgba(255,255,255,0.14);
+    background: rgba(255,255,255,0.06);
+    color: var(--text);
+    padding: 8px 10px;
+    border-radius: 999px;
+    cursor: pointer;
+    font-size: 13px;
+    touch-action: manipulation;
+  }
+  button:hover, .toggle:hover{ background: rgba(255,255,255,0.10); border-color: rgba(255,255,255,0.18); }
+  button:active{ transform: translateY(1px); }
+  .toggle{ display:inline-flex; align-items:center; gap:8px; }
+  .dot{ width:10px; height:10px; border-radius:50%; background: rgba(255,255,255,0.25); box-shadow: 0 0 0 2px rgba(255,255,255,0.08) inset; }
+  .toggle.on .dot{ background: rgba(255,255,255,0.90); }
+
+  #ui .grid{ display:grid; grid-template-columns:1fr 1fr; gap:10px 12px; }
+  @media(min-width:920px){ #ui .grid{ grid-template-columns:1fr 1fr 1fr 1fr; } }
+
+  .ctl{
+    padding:8px 10px; border-radius:14px;
+    border: 1px solid rgba(255,255,255,0.10);
+    background: rgba(255,255,255,0.04);
+  }
+  .line{ display:flex; justify-content:space-between; align-items:baseline; gap:10px; margin-bottom:6px; }
+  label{ font-size:12px; color:var(--muted); letter-spacing:.25px; }
+  .val{ font-size:12px; color:rgba(255,255,255,0.84); font-variant-numeric: tabular-nums; }
+  input[type=range]{ width:100%; accent-color: rgba(180,210,255,0.95); }
+
+  /* Android/WebView: keep input present (NOT display:none) so click() works reliably */
+  #fileInput{
+    position:fixed; left:-9999px; top:-9999px;
+    width:1px; height:1px; opacity:0.001;
+  }
+
+  #err{
+    position:fixed; left:12px; right:12px; top:12px;
+    padding:10px 12px; border-radius:12px;
+    background: rgba(140,24,24,0.62);
+    border: 1px solid rgba(255,255,255,0.18);
+    color: rgba(255,255,255,0.92);
+    font-size: 12px; white-space: pre-wrap;
+    z-index: 99999; display:none;
+  }
+  .hint{
+    position:fixed; top:12px; left:12px;
+    padding:8px 10px; border-radius:12px;
+    background: rgba(0,0,0,0.28);
+    border: 1px solid rgba(255,255,255,0.10);
+    color: rgba(255,255,255,0.78);
+    font-size: 12px;
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    pointer-events:none;
+    z-index: 11;
+  }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="err"></div>
+<div class="hint" id="hint">Tap “Set Background” to select your hill-station image.</div>
+<input id="fileInput" type="file" accept="image/*" />
+
+<div id="ui">
+  <div class="header">
+    <div class="title">
+      <strong>Cloud and Rain Simulation</strong>
+      <span>Single-file Canvas build (no external libraries). Android-safe background upload, responsive UI, realistic rain (mist + splashes), layered clouds, wind, time-of-day, and natural thunder with sliders.</span>
+    </div>
+    <div class="btns">
+      <button id="bgBtn">Set Background</button>
+      <button id="presetCalm">Calm Rain</button>
+      <button id="presetHeavy">Heavy Rain</button>
+      <button id="presetStorm">Storm</button>
+      <button id="thunderNow">Thunder Now</button>
+      <div class="toggle" id="thunderToggle" role="button" aria-pressed="false">
+        <span class="dot" aria-hidden="true"></span>Thunder
+      </div>
+    </div>
+  </div>
+
+  <div class="grid">
+    <div class="ctl">
+      <div class="line"><label for="rain">Rain intensity</label><div class="val" id="rainVal"></div></div>
+      <input id="rain" type="range" min="0" max="1" step="0.001" value="0.42">
+    </div>
+    <div class="ctl">
+      <div class="line"><label for="clouds">Cloud coverage</label><div class="val" id="cloudVal"></div></div>
+      <input id="clouds" type="range" min="0" max="1" step="0.001" value="0.62">
+    </div>
+    <div class="ctl">
+      <div class="line"><label for="windDir">Wind direction</label><div class="val" id="windDirVal"></div></div>
+      <input id="windDir" type="range" min="-180" max="180" step="1" value="20">
+    </div>
+    <div class="ctl">
+      <div class="line"><label for="windSpd">Wind speed</label><div class="val" id="windSpdVal"></div></div>
+      <input id="windSpd" type="range" min="0" max="1" step="0.001" value="0.35">
+    </div>
+
+    <div class="ctl">
+      <div class="line"><label for="tod">Time of day</label><div class="val" id="todVal"></div></div>
+      <input id="tod" type="range" min="0" max="1" step="0.001" value="0.35">
+    </div>
+    <div class="ctl">
+      <div class="line"><label for="light">Light</label><div class="val" id="lightVal"></div></div>
+      <input id="light" type="range" min="0.60" max="1.40" step="0.001" value="1.00">
+    </div>
+
+    <div class="ctl">
+      <div class="line"><label for="thFreq">Thunder rate</label><div class="val" id="thFreqVal"></div></div>
+      <input id="thFreq" type="range" min="0" max="1" step="0.001" value="0.55">
+    </div>
+    <div class="ctl">
+      <div class="line"><label for="thPower">Thunder strength</label><div class="val" id="thPowerVal"></div></div>
+      <input id="thPower" type="range" min="0" max="1" step="0.001" value="0.75">
+    </div>
+  </div>
+</div>
+
+<script>
+/* ============================ Robust Error HUD ============================ */
+const errBox = document.getElementById('err');
+function showErr(msg){
+  errBox.style.display = 'block';
+  errBox.textContent = msg;
+}
+window.addEventListener('error', (e)=>{
+  showErr(`JS Error:\n${e.message}\n${e.filename}:${e.lineno}:${e.colno}`);
+});
+window.addEventListener('unhandledrejection', (e)=>{
+  showErr(`Promise Rejection:\n${String(e.reason || e)}`);
+});
+
+/* ============================ Canvas Setup ============================ */
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d', { alpha:false });
+
+let W = 1, H = 1, DPR = 1;
+function resize(){
+  DPR = Math.min(2, window.devicePixelRatio || 1);
+  W = Math.max(1, Math.floor(window.innerWidth));
+  H = Math.max(1, Math.floor(window.innerHeight));
+  canvas.width = Math.floor(W * DPR);
+  canvas.height = Math.floor(H * DPR);
+  canvas.style.width = W + 'px';
+  canvas.style.height = H + 'px';
+  ctx.setTransform(DPR,0,0,DPR,0,0);
+  buildOrResize();
+}
+window.addEventListener('resize', resize);
+
+/* ============================ UI + Params ============================ */
+const ui = {
+  rain: document.getElementById('rain'),
+  clouds: document.getElementById('clouds'),
+  windDir: document.getElementById('windDir'),
+  windSpd: document.getElementById('windSpd'),
+  tod: document.getElementById('tod'),
+  light: document.getElementById('light'),
+  thFreq: document.getElementById('thFreq'),
+  thPower: document.getElementById('thPower'),
+
+  rainVal: document.getElementById('rainVal'),
+  cloudVal: document.getElementById('cloudVal'),
+  windDirVal: document.getElementById('windDirVal'),
+  windSpdVal: document.getElementById('windSpdVal'),
+  todVal: document.getElementById('todVal'),
+  lightVal: document.getElementById('lightVal'),
+  thFreqVal: document.getElementById('thFreqVal'),
+  thPowerVal: document.getElementById('thPowerVal'),
+
+  presetCalm: document.getElementById('presetCalm'),
+  presetHeavy: document.getElementById('presetHeavy'),
+  presetStorm: document.getElementById('presetStorm'),
+  thunderNow: document.getElementById('thunderNow'),
+  thunderToggle: document.getElementById('thunderToggle'),
+
+  bgBtn: document.getElementById('bgBtn'),
+  fileInput: document.getElementById('fileInput'),
+  hint: document.getElementById('hint')
+};
+
+const clamp01 = (v)=>Math.max(0, Math.min(1, v));
+const clamp = (v,a,b)=>Math.max(a, Math.min(b, v));
+const lerp = (a,b,t)=>a+(b-a)*t;
+const smoothstep = (t)=>t*t*(3-2*t);
+const deg2rad = (d)=>d*Math.PI/180;
+const rnd = (a=1)=>Math.random()*a;
+const rands = (a=1)=>(Math.random()*2-1)*a;
+
+const params = {
+  target: {
+    rain: +ui.rain.value,
+    clouds: +ui.clouds.value,
+    windDir: +ui.windDir.value,
+    windSpd: +ui.windSpd.value,
+    tod: +ui.tod.value,
+    light: +ui.light.value,
+    thFreq: +ui.thFreq.value,
+    thPower: +ui.thPower.value,
+    thunder: false,
+    storm: false
+  },
+  current: {
+    rain: +ui.rain.value,
+    clouds: +ui.clouds.value,
+    windDir: +ui.windDir.value,
+    windSpd: +ui.windSpd.value,
+    tod: +ui.tod.value,
+    light: +ui.light.value,
+    thFreq: +ui.thFreq.value,
+    thPower: +ui.thPower.value,
+    thunder: false,
+    storm: false
+  }
+};
+
+function todLabel(t){
+  return (t < 0.25) ? "Night" : (t < 0.45) ? "Dawn" : (t < 0.70) ? "Day" : "Dusk";
+}
+function syncLabels(){
+  ui.rainVal.textContent = `${Math.round(params.target.rain*100)}%`;
+  ui.cloudVal.textContent = `${Math.round(params.target.clouds*100)}%`;
+  ui.windDirVal.textContent = `${Math.round(params.target.windDir)}°`;
+  ui.windSpdVal.textContent = `${Math.round(params.target.windSpd*100)}%`;
+  ui.todVal.textContent = todLabel(params.target.tod);
+  ui.lightVal.textContent = `${params.target.light.toFixed(2)}×`;
+  ui.thFreqVal.textContent = `${Math.round(params.target.thFreq*100)}%`;
+  ui.thPowerVal.textContent = `${Math.round(params.target.thPower*100)}%`;
+  ui.thunderToggle.classList.toggle('on', params.target.thunder);
+  ui.thunderToggle.setAttribute('aria-pressed', params.target.thunder ? "true" : "false");
+}
+function bindRange(el, key){
+  el.addEventListener('input', ()=>{
+    params.target[key] = +el.value;
+    syncLabels();
+  }, { passive:true });
+}
+bindRange(ui.rain,'rain');
+bindRange(ui.clouds,'clouds');
+bindRange(ui.windDir,'windDir');
+bindRange(ui.windSpd,'windSpd');
+bindRange(ui.tod,'tod');
+bindRange(ui.light,'light');
+bindRange(ui.thFreq,'thFreq');
+bindRange(ui.thPower,'thPower');
+
+ui.thunderToggle.addEventListener('click', ()=>{
+  params.target.thunder = !params.target.thunder;
+  if (params.target.thunder) params.target.storm = false;
+  syncLabels();
+  ensureAudioUnlocked();
+});
+syncLabels();
+
+function setPreset(p){
+  Object.assign(params.target, p);
+  ui.rain.value = params.target.rain;
+  ui.clouds.value = params.target.clouds;
+  ui.windDir.value = params.target.windDir;
+  ui.windSpd.value = params.target.windSpd;
+  ui.tod.value = params.target.tod;
+  ui.light.value = params.target.light;
+  ui.thFreq.value = params.target.thFreq;
+  ui.thPower.value = params.target.thPower;
+  params.target.thunder = !!p.thunder;
+  params.target.storm = !!p.storm;
+  syncLabels();
+}
+ui.presetCalm.addEventListener('click', ()=>{
+  setPreset({ rain:0.28, clouds:0.45, windDir:12, windSpd:0.22, tod:0.42, light:1.05, thFreq:0.28, thPower:0.35, thunder:false, storm:false });
+  ensureAudioUnlocked();
+});
+ui.presetHeavy.addEventListener('click', ()=>{
+  setPreset({ rain:0.88, clouds:0.92, windDir:22, windSpd:0.55, tod:0.34, light:0.92, thFreq:0.60, thPower:0.78, thunder:true, storm:false });
+  ensureAudioUnlocked();
+});
+ui.presetStorm.addEventListener('click', ()=>{
+  setPreset({ rain:0.98, clouds:0.98, windDir:30, windSpd:0.78, tod:0.30, light:0.86, thFreq:0.80, thPower:0.92, thunder:true, storm:true });
+  ensureAudioUnlocked();
+});
+
+/* Smooth transitions */
+function smoothParams(dt){
+  const k = 1 - Math.pow(0.001, dt);
+  const c = params.current, t = params.target;
+  c.rain = lerp(c.rain, t.rain, k);
+  c.clouds = lerp(c.clouds, t.clouds, k);
+  c.windDir = lerp(c.windDir, t.windDir, k);
+  c.windSpd = lerp(c.windSpd, t.windSpd, k);
+  c.tod = lerp(c.tod, t.tod, k);
+  c.light = lerp(c.light, t.light, k);
+  c.thFreq = lerp(c.thFreq, t.thFreq, k);
+  c.thPower = lerp(c.thPower, t.thPower, k);
+  c.thunder = t.thunder;
+  c.storm = t.storm;
+}
+
+/* ============================ Background Upload (Android-safe) ============================ */
+let bgBitmap = null;    // ImageBitmap preferred
+let bgImage = null;     // HTMLImageElement fallback
+
+ui.bgBtn.addEventListener('click', ()=>{
+  ui.fileInput.value = ""; // allow re-select same image
+  ui.fileInput.click();    // must be in direct user gesture
+});
+
+ui.fileInput.addEventListener('change', async (e)=>{
+  const file = e.target.files && e.target.files[0];
+  if (!file) return;
+  try{
+    errBox.style.display = 'none';
+    if ('createImageBitmap' in window){
+      let bmp = null;
+      try{ bmp = await createImageBitmap(file, { imageOrientation:"from-image" }); }
+      catch(_){ bmp = await createImageBitmap(file); }
+      if (bgBitmap && bgBitmap.close) bgBitmap.close();
+      bgBitmap = bmp;
+      bgImage = null;
+    }else{
+      const url = URL.createObjectURL(file);
+      const img = new Image();
+      await new Promise((resolve, reject)=>{
+        img.onload = resolve; img.onerror = reject; img.src = url;
+      });
+      URL.revokeObjectURL(url);
+      bgImage = img;
+      bgBitmap = null;
+    }
+    ui.hint.style.display = 'none';
+  }catch(err){
+    showErr("Background load failed. Try a smaller image.\n\nDetails: " + (err?.message || String(err)));
+  }
+});
+
+/* ============================ Cloud Rendering (procedural sprites) ============================ */
+let cloudTextures = []; // array of offscreen canvases
+let clouds = [];        // cloud instances
+
+function mulberry32(seed){
+  let t = seed >>> 0;
+  return function(){
+    t += 0x6D2B79F5;
+    let r = Math.imul(t ^ (t >>> 15), 1 | t);
+    r ^= r + Math.imul(r ^ (r >>> 7), 61 | r);
+    return ((r ^ (r >>> 14)) >>> 0) / 4294967296;
+  };
+}
+function makeCloudTexture(seed){
+  const size = 320;
+  const c = document.createElement('canvas');
+  c.width = c.height = size;
+  const g = c.getContext('2d');
+  g.clearRect(0,0,size,size);
+
+  const puffCount = 12;
+  const rnd2 = mulberry32(seed);
+  for(let i=0;i<puffCount;i++){
+    const x = (0.18 + 0.64*rnd2())*size;
+    const y = (0.28 + 0.50*rnd2())*size;
+    const r = (0.10 + 0.22*rnd2())*size;
+    const a = 0.10 + 0.16*rnd2();
+    const grad = g.createRadialGradient(x,y, r*0.15, x,y,r);
+    grad.addColorStop(0, `rgba(255,255,255,${0.70*a})`);
+    grad.addColorStop(1, `rgba(255,255,255,0)`);
+    g.fillStyle = grad;
+    g.beginPath(); g.arc(x,y,r,0,Math.PI*2); g.fill();
+  }
+
+  g.globalCompositeOperation = "destination-in";
+  const mask = g.createRadialGradient(size*0.5,size*0.55, size*0.05, size*0.5,size*0.55, size*0.50);
+  mask.addColorStop(0, "rgba(255,255,255,1)");
+  mask.addColorStop(1, "rgba(255,255,255,0)");
+  g.fillStyle = mask;
+  g.fillRect(0,0,size,size);
+  g.globalCompositeOperation = "source-over";
+  return c;
+}
+
+function rebuildClouds(){
+  cloudTextures = [
+    makeCloudTexture(777),
+    makeCloudTexture(1337),
+    makeCloudTexture(424242)
+  ];
+
+  clouds = [];
+  const cov = params.current.clouds;
+  const count = Math.round(lerp(6, 38, cov));
+  for(let i=0;i<count;i++){
+    const layer = (Math.random() < 0.33) ? 0 : (Math.random() < 0.72) ? 1 : 2;
+    const dep = (layer===0) ? lerp(0.15,0.35,Math.random()) : (layer===1) ? lerp(0.45,0.70,Math.random()) : lerp(0.72,0.98,Math.random());
+    const tex = cloudTextures[Math.floor(Math.random()*cloudTextures.length)];
+    const scale = lerp(0.55, 1.35, 1-dep) * lerp(0.9, 1.15, Math.random());
+    clouds.push({
+      tex,
+      layer,
+      dep,
+      x: lerp(-0.15*W, 1.15*W, Math.random()),
+      y: lerp(0.08*H, 0.42*H, Math.random()) * lerp(0.85, 1.05, 1-dep),
+      s: scale,
+      wob: Math.random()*10,
+      spd: lerp(0.10, 0.58, dep) * (0.7 + 0.6*Math.random()),
+      rot: rands(Math.PI)
+    });
+  }
+}
+
+function buildOrResize(){
+  rebuildClouds();
+  seedRain();
+}
+
+/* ============================ Rain (perspective streaks) ============================ */
+let drops = [];
+let splashes = [];
+const MAX_SPLASH = 1400;
+
+function seedRain(){
+  const target = Math.floor(lerp(400, 5200, params.current.rain*params.current.rain));
+  drops = [];
+  for(let i=0;i<target;i++) drops.push(makeDrop(true));
+  splashes = [];
+  for(let i=0;i<MAX_SPLASH;i++) splashes.push({x:0,y:0,r:0,life:-1});
+}
+
+function makeDrop(initial=false){
+  const z = Math.pow(Math.random(), 0.55);
+  const x = (Math.random()-0.5) * (W * lerp(1.2, 1.8, z));
+  const y = initial ? Math.random()*H : -rnd(H*0.2);
+  const v = lerp(680, 1500, z);
+  return { x, y, z, v, phase:Math.random()*10 };
+}
+
+let splashCursor = 0;
+function spawnSplash(intensity, windx){
+  const n = Math.floor(lerp(0, 5, intensity*intensity));
+  for(let k=0;k<n;k++){
+    const s = splashes[splashCursor++ % MAX_SPLASH];
+    s.x = (W*0.5) + (Math.random()-0.5)*(W*0.62) + windx*40;
+    s.y = H*(0.74 + Math.random()*0.20);
+    s.r = lerp(1.0, 6.0, Math.random()) * (0.6 + 1.1*intensity);
+    s.life = 0.0;
+  }
+}
+
+/* ============================ Thunder (natural audio + lightning) ============================ */
+const lightning = { flash:0, posX:0.55, posY:0.42, timer:0, next:2.4+Math.random()*5.0 };
+const gust = { t:0, phase:Math.random()*10 };
+
+const audio = { ok:false, ctx:null, unlocked:false };
+function ensureAudioUnlocked(){
+  if (audio.unlocked) return;
+  try{
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return;
+    audio.ctx = audio.ctx || new AC();
+    const b = audio.ctx.createBuffer(1, 1, audio.ctx.sampleRate);
+    const s = audio.ctx.createBufferSource();
+    s.buffer = b;
+    s.connect(audio.ctx.destination);
+    s.start(0);
+    audio.unlocked = true;
+    audio.ok = true;
+  }catch(_){
+    audio.ok = false;
+  }
+}
+document.addEventListener('pointerdown', ensureAudioUnlocked, { once:true });
+
+function playThunder(strength, storm, delaySec){
+  if (!audio.ok || !audio.ctx) return;
+  const ctxA = audio.ctx;
+  const t0 = ctxA.currentTime + Math.max(0, delaySec||0);
+
+  const s = clamp01(strength);
+  const dur = storm ? 1.6 : 1.1;
+  const nSamp = Math.floor(ctxA.sampleRate * dur);
+  const buf = ctxA.createBuffer(1, nSamp, ctxA.sampleRate);
+  const d = buf.getChannelData(0);
+  for(let i=0;i<nSamp;i++){
+    const t = i / nSamp;
+    const env = Math.pow(1.0 - t, storm ? 2.3 : 1.9);
+    d[i] = (Math.random()*2-1) * env;
+  }
+
+  const src = ctxA.createBufferSource();
+  src.buffer = buf;
+
+  const lp = ctxA.createBiquadFilter();
+  lp.type = "lowpass";
+  lp.frequency.value = storm ? 260 : 330;
+  lp.Q.value = 0.8;
+
+  const hp = ctxA.createBiquadFilter();
+  hp.type = "highpass";
+  hp.frequency.value = storm ? 18 : 28;
+  hp.Q.value = 0.7;
+
+  const gain = ctxA.createGain();
+  const vol = (storm ? 0.16 : 0.11) * s;
+  gain.gain.setValueAtTime(0.0001, t0);
+  gain.gain.linearRampToValueAtTime(vol, t0 + 0.03);
+  gain.gain.exponentialRampToValueAtTime(0.001, t0 + dur + (storm ? 0.55 : 0.35));
+
+  src.connect(lp); lp.connect(hp); hp.connect(gain); gain.connect(ctxA.destination);
+
+  const isClose = (delaySec||0) < 0.45;
+  if (isClose && Math.random() < (storm ? 0.60 : 0.42)){
+    const crackDur = 0.12 + Math.random()*0.10;
+    const cN = Math.floor(ctxA.sampleRate * crackDur);
+    const cBuf = ctxA.createBuffer(1, cN, ctxA.sampleRate);
+    const cd = cBuf.getChannelData(0);
+    for(let i=0;i<cN;i++){
+      const t = i / cN;
+      const env = Math.pow(1.0 - t, 2.6);
+      cd[i] = (Math.random()*2-1) * env;
+    }
+    const cSrc = ctxA.createBufferSource();
+    cSrc.buffer = cBuf;
+    const bp = ctxA.createBiquadFilter();
+    bp.type="bandpass";
+    bp.frequency.value = storm ? 560 : 740;
+    bp.Q.value = 1.2;
+    const cg = ctxA.createGain();
+    const cVol = vol * (storm ? 0.55 : 0.45);
+    cg.gain.setValueAtTime(0.0001, t0);
+    cg.gain.linearRampToValueAtTime(cVol, t0 + 0.01);
+    cg.gain.exponentialRampToValueAtTime(0.001, t0 + crackDur);
+    cSrc.connect(bp); bp.connect(cg); cg.connect(ctxA.destination);
+    cSrc.start(t0);
+    cSrc.stop(t0 + crackDur + 0.02);
+  }
+
+  const osc = ctxA.createOscillator();
+  osc.type = "sine";
+  osc.frequency.value = storm ? 42 : 52;
+  const og = ctxA.createGain();
+  const oVol = vol * (storm ? 0.65 : 0.55);
+  og.gain.setValueAtTime(0.0001, t0);
+  og.gain.linearRampToValueAtTime(oVol, t0 + 0.05);
+  og.gain.exponentialRampToValueAtTime(0.001, t0 + (storm ? 1.9 : 1.4));
+  osc.connect(og); og.connect(ctxA.destination);
+
+  src.start(t0); osc.start(t0);
+  src.stop(t0 + dur + 0.08);
+  osc.stop(t0 + (storm ? 1.9 : 1.4));
+}
+
+function scheduleThunder(flashStrength){
+  const storm = params.current.storm;
+  const thPower = params.current.thPower;
+  const pow = lerp(0.55, 1.25, clamp01(thPower));
+  const minD = storm ? 120 : 180;
+  const maxD = storm ? 680 : 920;
+  const dist = lerp(minD, maxD, Math.random());
+  const delay = dist / 343.0;
+  playThunder(flashStrength * pow, storm, delay);
+}
+
+function triggerLightningManual(){
+  ensureAudioUnlocked();
+  const pow = lerp(0.55, 1.25, clamp01(params.current.thPower));
+  const s = clamp01(0.85 + Math.random()*0.25) * pow;
+  lightning.flash = Math.max(lightning.flash, s * (params.current.storm ? 1.0 : 0.85));
+  lightning.posX = 0.22 + Math.random()*0.60;
+  lightning.posY = 0.18 + Math.random()*0.52;
+  scheduleThunder(s);
+  const flickers = params.current.storm ? 3 : 2;
+  for(let i=1;i<=flickers;i++){
+    setTimeout(()=>{ lightning.flash = Math.max(lightning.flash, s*(params.current.storm?0.35:0.28)); }, 60*i + Math.random()*70);
+  }
+}
+ui.thunderNow.addEventListener('click', triggerLightningManual);
+
+function updateLightning(dt){
+  const enabled = params.current.thunder || params.current.storm;
+  if (!enabled){
+    lightning.flash = lerp(lightning.flash, 0, 1 - Math.pow(0.001, dt));
+    lightning.timer = 0;
+    lightning.next = 2.4 + Math.random()*5.0;
+    return;
+  }
+  lightning.timer += dt;
+  const intensity = params.current.rain;
+  const thFreq = params.current.thFreq;
+  const rateMul = lerp(1.35, 0.55, clamp01(thFreq));
+  const baseFreq = lerp(1.05, 0.45, intensity) * rateMul * (params.current.storm ? 0.68 : 1.0);
+
+  if (lightning.timer > lightning.next * baseFreq){
+    lightning.timer = 0;
+    lightning.next = 1.6 + Math.random()*5.0;
+
+    const base = params.current.storm ? 1.0 : 0.75;
+    const powMul = lerp(0.45, 1.15, clamp01(params.current.thPower));
+    const s = base * powMul * lerp(0.6, 1.0, Math.random());
+
+    lightning.flash = s;
+    lightning.posX = 0.25 + Math.random()*0.55;
+    lightning.posY = 0.22 + Math.random()*0.45;
+
+    if (audio.ok) scheduleThunder(s);
+
+    if (Math.random() < (params.current.storm ? 0.65 : 0.45)){
+      setTimeout(()=>{ lightning.flash = Math.max(lightning.flash, base*0.28*powMul); }, 90 + Math.random()*90);
+      if (params.current.storm) setTimeout(()=>{ lightning.flash = Math.max(lightning.flash, base*0.18*powMul); }, 180 + Math.random()*120);
+    }
+  }
+  lightning.flash = Math.max(0, lightning.flash - dt*(params.current.storm ? 4.1 : 3.1));
+}
+
+/* ============================ Background Drawing Helpers ============================ */
+function rgb(arr, a=1){ return `rgba(${arr[0]|0},${arr[1]|0},${arr[2]|0},${a})`; }
+function mixRGB(a,b,t){
+  return [
+    a[0] + (b[0]-a[0])*t,
+    a[1] + (b[1]-a[1])*t,
+    a[2] + (b[2]-a[2])*t
+  ];
+}
+
+function drawSky(tod, overcast){
+  const t = clamp01(tod);
+  const day = smoothstep(clamp01((t-0.18)/0.55));
+  const dusk = smoothstep(clamp01((t-0.70)/0.25));
+  const oc = clamp01(overcast);
+
+  const top = mixRGB([20,28,44], [72,118,168], day);
+  const bot = mixRGB([6,8,12], [142,176,198], day);
+  const duskTint = [220,160,120];
+
+  const top2 = mixRGB(top, duskTint, dusk*0.10);
+  const bot2 = mixRGB(bot, duskTint, dusk*0.06);
+
+  const top3 = mixRGB(top2, [18,22,30], oc*0.55);
+  const bot3 = mixRGB(bot2, [10,12,16], oc*0.55);
+
+  const g = ctx.createLinearGradient(0,0,0,H);
+  g.addColorStop(0, rgb(top3, 1));
+  g.addColorStop(1, rgb(bot3, 1));
+  ctx.fillStyle = g;
+  ctx.fillRect(0,0,W,H);
+
+  const haze = ctx.createLinearGradient(0, H*0.35, 0, H*0.85);
+  haze.addColorStop(0, `rgba(210,230,255,${0.07 + 0.08*day})`);
+  haze.addColorStop(1, `rgba(210,230,255,0)`);
+  ctx.fillStyle = haze;
+  ctx.fillRect(0,0,W,H);
+}
+
+function drawDefaultHills(overcast){
+  const oc = clamp01(overcast);
+  for(let i=0;i<4;i++){
+    const yBase = H*(0.58 + i*0.08);
+    const a = (0.26 - i*0.04) * lerp(1.0, 1.18, oc);
+    ctx.fillStyle = `rgba(20,30,45,${a})`;
+    ctx.beginPath();
+    ctx.moveTo(0,H);
+    ctx.lineTo(0,yBase);
+    const step = Math.max(18, Math.round(W/44));
+    for(let x=0; x<=W; x+=step){
+      const y = yBase - (Math.sin((x+i*70)*0.012)*14 + Math.random()*20);
+      ctx.lineTo(x,y);
+    }
+    ctx.lineTo(W,H);
+    ctx.closePath();
+    ctx.fill();
+  }
+}
+
+function drawCoverImage(imgLike){
+  const iw = imgLike.width || imgLike.naturalWidth;
+  const ih = imgLike.height || imgLike.naturalHeight;
+  if (!iw || !ih) return;
+
+  const scale = Math.max(W/iw, H/ih);
+  const sw = iw*scale, sh = ih*scale;
+  const dx = (W - sw)*0.5, dy = (H - sh)*0.5;
+
+  ctx.drawImage(imgLike, dx, dy, sw, sh);
+
+  const fade = ctx.createLinearGradient(0,0,0,H);
+  fade.addColorStop(0, "rgba(10,14,20,0.10)");
+  fade.addColorStop(1, "rgba(10,14,20,0.28)");
+  ctx.fillStyle = fade;
+  ctx.fillRect(0,0,W,H);
+}
+
+/* ============================ Rendering: Clouds ============================ */
+function drawClouds(dt){
+  const cov = params.current.clouds;
+  if (cov < 0.02) return;
+
+  const dir = deg2rad(params.current.windDir);
+  const spd = params.current.windSpd;
+  const storminess = params.current.storm ? 1.0 : (params.current.thunder ? 0.55 : 0.0);
+
+  gust.t += dt;
+  const gWave = Math.sin((gust.t+gust.phase)*0.35) * 0.6 + Math.sin((gust.t+gust.phase)*0.12) * 0.4;
+  const gPulse = (Math.sin((gust.t+gust.phase)*0.9) > 0.92) ? 1.0 : 0.0;
+  const g = (0.12 + 0.45*storminess) * (0.25 + 0.75*spd) * (0.65*gWave + 0.55*gPulse);
+
+  const vx = Math.cos(dir) * (0.35 + 1.40*spd) * (1.0 + 0.30*Math.abs(g));
+  const vy = Math.sin(dir) * (0.12 + 0.55*spd) * (1.0 + 0.30*Math.abs(g));
+
+  const heavy = smoothstep(clamp01((params.current.rain-0.55)/0.45));
+  const tod = params.current.tod;
+  const day = smoothstep(clamp01((tod-0.18)/0.55));
+
+  const desired = Math.round(lerp(6, 38, cov));
+  if (Math.abs(desired - clouds.length) > 7) rebuildClouds();
+
+  for(const c of clouds){
+    const layerMul = (c.layer===0) ? 0.55 : (c.layer===1) ? 0.82 : 1.12;
+    const drift = c.spd * layerMul * dt * 40 * vx;
+    c.x += drift;
+    c.y += dt * 10 * vy * (0.4 + 0.6*c.dep);
+    c.wob += dt * (0.15 + 0.25*c.dep);
+
+    const wrapL = -0.30*W, wrapR = 1.30*W;
+    if (c.x > wrapR) c.x = wrapL;
+    if (c.x < wrapL) c.x = wrapR;
+
+    const overcast = params.current.clouds;
+    const baseA = lerp(0.06, 0.62, overcast) * lerp(1.0, 0.92, heavy);
+    const alpha = baseA * lerp(0.60, 1.10, c.dep) * (1.0 + 0.18*storminess);
+
+    const tint = lerp(1.0, 0.84, overcast) * lerp(1.0, 0.93, heavy) * lerp(0.92, 1.0, day);
+    const cool = lerp(1.00, 0.93, 1.0-c.dep);
+
+    const size = Math.max(1, c.tex.width * c.s * lerp(0.35, 0.95, 1.0-c.dep));
+    const x = c.x + Math.sin(c.wob)*12*(0.6+c.dep);
+    const y = c.y + Math.cos(c.wob*0.8)*6*(0.6+c.dep);
+
+    ctx.globalAlpha = alpha;
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(c.rot * 0.03);
+    ctx.drawImage(c.tex, -size*0.5, -size*0.32, size, size*0.62);
+    ctx.globalCompositeOperation = 'source-atop';
+    ctx.fillStyle = `rgba(${Math.floor(255*tint*cool)},${Math.floor(255*tint*cool)},${Math.floor(255*tint)},1)`;
+    ctx.fillRect(-size*0.5, -size*0.32, size, size*0.62);
+    ctx.restore();
+    ctx.globalCompositeOperation = 'source-over';
+  }
+  ctx.globalAlpha = 1.0;
+}
+
+/* ============================ Rendering: Rain ============================ */
+function drawRain(dt){
+  const intensity = params.current.rain;
+  if (intensity < 0.001) return;
+
+  const dir = deg2rad(params.current.windDir);
+  const spd = params.current.windSpd;
+  const storminess = params.current.storm ? 1.0 : (params.current.thunder ? 0.55 : 0.0);
+
+  const g = (0.12 + 0.45*storminess) * (0.25 + 0.75*spd) * (Math.sin((gust.t+gust.phase)*0.35)*0.6 + Math.sin((gust.t+gust.phase)*0.12)*0.4);
+
+  const wind = (0.10 + 1.05*spd) * (1.0 + 0.35*Math.abs(g));
+  const wx = Math.cos(dir) * wind;
+  const wy = Math.sin(dir) * wind;
+
+  const heavy = smoothstep(clamp01((intensity-0.55)/0.45));
+  const streakLenBase = lerp(10, 48, intensity) * lerp(0.6, 1.15, 1.0+heavy);
+  const speedMul = lerp(0.65, 1.25, intensity);
+
+  const target = Math.floor(lerp(400, 5200, intensity*intensity));
+  if (drops.length !== target){
+    if (drops.length < target){
+      const add = Math.min(220, target - drops.length);
+      for(let i=0;i<add;i++) drops.push(makeDrop(false));
+    }else{
+      drops.length = Math.max(target, drops.length - 320);
+    }
+  }
+
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+
+  const tod = params.current.tod;
+  const day = smoothstep(clamp01((tod-0.18)/0.55));
+  const overcast = params.current.clouds;
+  let vis = lerp(0.70, 0.96, day) * lerp(1.0, 0.84, overcast) * lerp(1.0, 0.74, heavy);
+  vis = clamp01(vis + 0.25*clamp01(lightning.flash*0.65));
+
+  const ang = Math.atan2(wx, 1.35);
+
+  for(let i=0;i<drops.length;i++){
+    const d = drops[i];
+    const z = d.z;
+    const px = (W*0.5) + d.x + wx*90*z;
+    const py = d.y;
+
+    const sp = (d.v*speedMul) * lerp(0.55, 1.15, z);
+    d.y += sp * dt;
+    d.x += (wx*420*z) * dt;
+
+    if (d.y > H + 60){
+      d.y = -rnd(120);
+      d.x = (Math.random()-0.5) * (W * lerp(1.2, 1.8, z));
+      if (heavy > 0.15 && Math.random() < (0.18 + 0.58*intensity)){
+        spawnSplash(intensity, wx);
+      }
+    }
+
+    const len = streakLenBase * lerp(0.55, 1.55, z) * (0.90 + 0.10*Math.sin(d.phase + performance.now()*0.004));
+    const thickness = lerp(0.55, 1.65, z) * lerp(0.6, 1.05, intensity);
+    const a = vis * (0.12 + 0.78*intensity) * lerp(0.18, 0.88, z);
+
+    ctx.globalAlpha = a;
+    ctx.lineWidth = thickness;
+
+    const dx = Math.sin(ang) * len * (0.8 + 0.6*wind);
+    const dy = len;
+
+    ctx.beginPath();
+    ctx.moveTo(px, py);
+    ctx.lineTo(px + dx, py + dy);
+    ctx.strokeStyle = "rgba(205,225,255,1)";
+    ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+
+  if (intensity > 0.12){
+    const splashRate = lerp(0.0, 1.0, intensity*intensity);
+    const maxLife = lerp(0.25, 0.42, intensity);
+    for(let i=0;i<splashes.length;i++){
+      const s = splashes[i];
+      if (s.life < 0) continue;
+      s.life += dt;
+      const t = s.life / maxLife;
+      if (t >= 1){
+        s.life = -1;
+        continue;
+      }
+      const a = (1-t);
+      const r = s.r * (0.55 + 0.85*t);
+      ctx.globalAlpha = a * (0.10 + 0.55*splashRate);
+      ctx.lineWidth = 1.3;
+      ctx.strokeStyle = "rgba(210,230,255,1)";
+      ctx.beginPath();
+      ctx.arc(s.x, s.y, r, 0, Math.PI*2);
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  if (heavy > 0.01){
+    const fogA = (0.04 + 0.38*heavy) * lerp(0.65, 1.25, params.current.clouds);
+    const g2 = ctx.createLinearGradient(0, H*0.25, 0, H);
+    g2.addColorStop(0, `rgba(210,230,255,${fogA*0.25})`);
+    g2.addColorStop(1, `rgba(210,230,255,${fogA})`);
+    ctx.fillStyle = g2;
+    ctx.fillRect(0,0,W,H);
+  }
+}
+
+/* ============================ Lightning Overlay ============================ */
+function drawLightning(){
+  if (lightning.flash <= 0.001) return;
+  const f = clamp01(lightning.flash);
+  const x = lightning.posX * W;
+  const y = lightning.posY * H;
+
+  ctx.globalAlpha = f * 0.12;
+  ctx.fillStyle = "rgba(240,248,255,1)";
+  ctx.fillRect(0,0,W,H);
+
+  ctx.globalAlpha = f * 0.55;
+  const r = Math.max(W,H) * 0.55;
+  const g = ctx.createRadialGradient(x,y, r*0.05, x,y, r);
+  g.addColorStop(0, "rgba(240,248,255,0.92)");
+  g.addColorStop(1, "rgba(240,248,255,0)");
+  ctx.fillStyle = g;
+  ctx.fillRect(0,0,W,H);
+
+  ctx.globalAlpha = 1;
+}
+
+/* ============================ Main Loop ============================ */
+let last = performance.now();
+function frame(now){
+  const dt = Math.min(0.033, (now-last)/1000);
+  last = now;
+
+  smoothParams(dt);
+  updateLightning(dt);
+
+  ctx.setTransform(DPR,0,0,DPR,0,0);
+
+  const tod = params.current.tod;
+  const overcast = params.current.clouds;
+  drawSky(tod, overcast);
+
+  if (bgBitmap) drawCoverImage(bgBitmap);
+  else if (bgImage) drawCoverImage(bgImage);
+  else drawDefaultHills(overcast);
+
+  const heavy = smoothstep(clamp01((params.current.rain-0.55)/0.45));
+  const lightMul = clamp(params.current.light, 0.5, 1.6);
+
+  const vign = (0.14 + 0.20*heavy) * (0.80 + 0.20*overcast);
+  ctx.globalAlpha = vign;
+  const vg = ctx.createRadialGradient(W*0.5, H*0.55, Math.min(W,H)*0.20, W*0.5, H*0.55, Math.max(W,H)*0.68);
+  vg.addColorStop(0, "rgba(0,0,0,0)");
+  vg.addColorStop(1, "rgba(0,0,0,1)");
+  ctx.fillStyle = vg;
+  ctx.fillRect(0,0,W,H);
+  ctx.globalAlpha = 1;
+
+  if (Math.abs(lightMul-1.0) > 0.001){
+    const a = (lightMul < 1) ? (1-lightMul)*0.28 : (lightMul-1)*0.20;
+    ctx.globalAlpha = a;
+    ctx.fillStyle = (lightMul < 1) ? "rgba(0,0,0,1)" : "rgba(240,248,255,1)";
+    ctx.fillRect(0,0,W,H);
+    ctx.globalAlpha = 1;
+  }
+
+  drawClouds(dt);
+  drawRain(dt);
+  drawLightning();
+
+  requestAnimationFrame(frame);
+}
+
+/* Kickoff */
+function start(){
+  resize();
+  seedRain();
+  requestAnimationFrame(frame);
+}
+start();
+
+setInterval(()=>{
+  // if cloud coverage changes significantly, rebuild (keeps memory stable)
+  const cov = params.current.clouds;
+  const desired = Math.round(lerp(6, 38, cov));
+  if (Math.abs(desired - clouds.length) > 7) rebuildClouds();
+}, 650);
+
+ui.thunderToggle.addEventListener('pointerdown', ensureAudioUnlocked, { passive:true });
+ui.thunderNow.addEventListener('pointerdown', ensureAudioUnlocked, { passive:true });
+
+setTimeout(()=>{
+  if (!canvas.width || !canvas.height){
+    showErr("Canvas failed to initialize. Try reloading the page.");
+  }
+}, 900);
+</script>
+</body>
+</html>
