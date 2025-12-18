@@ -814,18 +814,18 @@ function drawClouds(dt){
     ctx.globalCompositeOperation = 'source-atop';
     ctx.fillStyle = `rgba(${Math.floor(255*tint*cool)},${Math.floor(255*tint*cool)},${Math.floor(255*tint)},1)`;
     ctx.fillRect(-size*0.5, -size*0.32, size, size*0.62);
-    // Soft highlight on sun-facing edge
+    // Soft highlight on sun-facing edge (masked to cloud alpha)
     const grad = ctx.createLinearGradient(-size*0.6, -size*0.2, size*0.6, size*0.1);
     grad.addColorStop(0, `rgba(${210 + 30*warmth},${210 + 14*warmth},${225 - 8*warmth},${0.08 + 0.12*sunLit})`);
     grad.addColorStop(1, `rgba(${200 + 14*warmth},${205 + 10*warmth},${220 - 6*warmth},${0.02 + 0.08*sunLit})`);
-    ctx.globalCompositeOperation = 'lighter';
+    ctx.globalCompositeOperation = 'source-atop';
     ctx.fillStyle = grad;
     ctx.fillRect(-size*0.5, -size*0.32, size, size*0.62);
-    // Subtle underside shadow for volume
+    // Subtle underside shadow for volume (also masked)
     const shade = ctx.createLinearGradient(0, -size*0.1, 0, size*0.5);
     shade.addColorStop(0, `rgba(0,0,0,0)`);
     shade.addColorStop(1, `rgba(0,0,0,${0.10 + 0.16*(1-c.dep)})`);
-    ctx.globalCompositeOperation = 'multiply';
+    ctx.globalCompositeOperation = 'source-atop';
     ctx.fillStyle = shade;
     ctx.fillRect(-size*0.5, -size*0.32, size, size*0.62);
     ctx.restore();
