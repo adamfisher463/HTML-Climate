@@ -225,6 +225,35 @@ const deg2rad = (d)=>d*Math.PI/180;
 const rnd = (a=1)=>Math.random()*a;
 const rands = (a=1)=>(Math.random()*2-1)*a;
 
+const camera = {
+  horizon: 0.62,   // relative to H
+  focal: 1.08,     // higher => stronger perspective foreshortening
+  vpY: 0.22        // vanishing point vertical anchor for rain streaks
+};
+const rainPhysics = {
+  gravity: 1850,  // px/s^2, tuned for terminal velocity of medium drops
+  drag: 0.35      // horizontal damping for wind carried streaks
+};
+
+function projectParallax(x, y, depth){
+  const d = 1 + depth * camera.focal;
+  return {
+    x: (x - W*0.5)/d + W*0.5,
+    y: (y - H*camera.horizon)/d + H*camera.horizon,
+    scale: 1/d
+  };
+}
+function sunVector(tod){
+  const t = clamp01(tod);
+  const angle = lerp(-Math.PI*0.28, Math.PI*1.12, t);
+  return { x: Math.cos(angle), y: Math.sin(angle) };
+}
+function sunWarmth(tod){
+  const t = clamp01(tod);
+  const dist = Math.abs(t - 0.5);
+  return clamp01(1 - dist*2.1); // warmer near dawn/dusk
+}
+
 const params = {
   target: {
     rain: +ui.rain.value,
@@ -467,8 +496,9 @@ function makeDrop(initial=false){
   const z = Math.pow(Math.random(), 0.55);
   const x = (Math.random()-0.5) * (W * lerp(1.2, 1.8, z));
   const y = initial ? Math.random()*H : -rnd(H*0.2);
-  const v = lerp(680, 1500, z);
-  return { x, y, z, v, phase:Math.random()*10 };
+  const size = lerp(0.55, 1.75, z);
+  const terminal = lerp(820, 1650, Math.sqrt(size)); // heavier drops fall faster
+  return { x, y, z, vx: 0, vy: terminal*0.15, terminal, size, phase:Math.random()*10 };
 }
 
 let splashCursor = 0;
@@ -745,6 +775,8 @@ function drawClouds(dt){
   const heavy = smoothstep(clamp01((params.current.rain-0.55)/0.45));
   const tod = params.current.tod;
   const day = smoothstep(clamp01((tod-0.18)/0.55));
+  const sun = sunVector(tod);
+  const warmth = sunWarmth(tod);
 
   const desired = Math.round(lerp(6, 38, cov));
   if (Math.abs(desired - clouds.length) > 7) rebuildClouds();
@@ -766,18 +798,35 @@ function drawClouds(dt){
 
     const tint = lerp(1.0, 0.84, overcast) * lerp(1.0, 0.93, heavy) * lerp(0.92, 1.0, day);
     const cool = lerp(1.00, 0.93, 1.0-c.dep);
+    const sunLit = clamp01(0.42 + sun.x*0.42 + sun.y*0.28);
 
-    const size = Math.max(1, c.tex.width * c.s * lerp(0.35, 0.95, 1.0-c.dep));
+    const sizeBase = Math.max(1, c.tex.width * c.s * lerp(0.35, 0.95, 1.0-c.dep));
     const x = c.x + Math.sin(c.wob)*12*(0.6+c.dep);
     const y = c.y + Math.cos(c.wob*0.8)*6*(0.6+c.dep);
+    const p = projectParallax(x, y, c.dep);
+    const size = sizeBase * p.scale;
 
     ctx.globalAlpha = alpha;
     ctx.save();
-    ctx.translate(x, y);
+    ctx.translate(p.x, p.y);
     ctx.rotate(c.rot * 0.03);
     ctx.drawImage(c.tex, -size*0.5, -size*0.32, size, size*0.62);
     ctx.globalCompositeOperation = 'source-atop';
     ctx.fillStyle = `rgba(${Math.floor(255*tint*cool)},${Math.floor(255*tint*cool)},${Math.floor(255*tint)},1)`;
+    ctx.fillRect(-size*0.5, -size*0.32, size, size*0.62);
+    // Soft highlight on sun-facing edge (masked to cloud alpha)
+    const grad = ctx.createLinearGradient(-size*0.6, -size*0.2, size*0.6, size*0.1);
+    grad.addColorStop(0, `rgba(${210 + 30*warmth},${210 + 14*warmth},${225 - 8*warmth},${0.08 + 0.12*sunLit})`);
+    grad.addColorStop(1, `rgba(${200 + 14*warmth},${205 + 10*warmth},${220 - 6*warmth},${0.02 + 0.08*sunLit})`);
+    ctx.globalCompositeOperation = 'source-atop';
+    ctx.fillStyle = grad;
+    ctx.fillRect(-size*0.5, -size*0.32, size, size*0.62);
+    // Subtle underside shadow for volume (also masked)
+    const shade = ctx.createLinearGradient(0, -size*0.1, 0, size*0.5);
+    shade.addColorStop(0, `rgba(0,0,0,0)`);
+    shade.addColorStop(1, `rgba(0,0,0,${0.10 + 0.16*(1-c.dep)})`);
+    ctx.globalCompositeOperation = 'source-atop';
+    ctx.fillStyle = shade;
     ctx.fillRect(-size*0.5, -size*0.32, size, size*0.62);
     ctx.restore();
     ctx.globalCompositeOperation = 'source-over';
@@ -823,34 +872,50 @@ function drawRain(dt){
   let vis = lerp(0.70, 0.96, day) * lerp(1.0, 0.84, overcast) * lerp(1.0, 0.74, heavy);
   vis = clamp01(vis + 0.25*clamp01(lightning.flash*0.65));
 
+  const vp = {
+    x: W*0.5 + Math.sin(dir)*W*0.12,
+    y: H*camera.vpY + H*0.05*spd
+  };
   const ang = Math.atan2(wx, 1.35);
 
   for(let i=0;i<drops.length;i++){
     const d = drops[i];
     const z = d.z;
-    const px = (W*0.5) + d.x + wx*90*z;
-    const py = d.y;
+    // Simple ballistic fall with wind drag and a terminal cap
+    d.vy = Math.min(d.terminal, d.vy + rainPhysics.gravity * dt);
+    const windDrift = wx*420*z;
+    d.vx += (windDrift - d.vx*rainPhysics.drag) * dt;
 
-    const sp = (d.v*speedMul) * lerp(0.55, 1.15, z);
-    d.y += sp * dt;
-    d.x += (wx*420*z) * dt;
+    d.y += (d.vy * speedMul) * dt;
+    d.x += (d.vx) * dt;
+    const proj = projectParallax((W*0.5) + d.x + wx*90*z, d.y, z);
+    const px = proj.x;
+    const py = proj.y;
+    const depthScale = proj.scale;
 
     if (d.y > H + 60){
       d.y = -rnd(120);
       d.x = (Math.random()-0.5) * (W * lerp(1.2, 1.8, z));
+      d.vx = 0;
+      d.vy = d.terminal*0.12;
       if (heavy > 0.15 && Math.random() < (0.18 + 0.58*intensity)){
         spawnSplash(intensity, wx);
       }
     }
 
-    const len = streakLenBase * lerp(0.55, 1.55, z) * (0.90 + 0.10*Math.sin(d.phase + performance.now()*0.004));
-    const thickness = lerp(0.55, 1.65, z) * lerp(0.6, 1.05, intensity);
+    const len = streakLenBase * lerp(0.55, 1.55, z) * (0.90 + 0.10*Math.sin(d.phase + performance.now()*0.004)) * depthScale;
+    const thickness = lerp(0.55, 1.65, z) * lerp(0.6, 1.05, intensity) * depthScale;
     const a = vis * (0.12 + 0.78*intensity) * lerp(0.18, 0.88, z);
 
     ctx.globalAlpha = a;
     ctx.lineWidth = thickness;
 
-    const dx = Math.sin(ang) * len * (0.8 + 0.6*wind);
+    const dirToVpX = vp.x - px;
+    const dirToVpY = vp.y - py;
+    const vpNorm = Math.max(1, Math.hypot(dirToVpX, dirToVpY));
+    const vpTilt = clamp(dirToVpX / vpNorm, -0.65, 0.65);
+
+    const dx = (Math.sin(ang) * (0.75 + 0.45*wind) + vpTilt*0.55) * len;
     const dy = len;
 
     ctx.beginPath();
